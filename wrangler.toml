@@ -8,6 +8,15 @@ NIGERIA_IP = "197.211.52.65"
 # Set MOVIEBOX_SECRET via: wrangler secret put MOVIEBOX_SECRET
 # This must match MOVIEBOX_WORKER_SECRET in your D.Verse backend env
 
+# ─── 2026-08-13 relay fix ────────────────────────────────────────────────
+# MovieBox rejects Cloudflare Workers' egress IPs at the transport layer.
+# All Android/mobile-API calls now route through a Vercel relay that
+# re-issues the signed request from a different IP. See
+# moviebox-relay-vercel/README.md for the relay itself.
+# Set via:
+#   wrangler secret put RELAY_URL     -> e.g. https://spun-moviebox-relay.vercel.app
+#   wrangler secret put RELAY_SECRET  -> must match Vercel's RELAY_SECRET env var
+
 # Auth token cache for the mobile Android API (see signing.ts). Required as
 # of the 2026-06-29 fix — MovieBox now requires a bearer token (obtained via
 # a one-time bootstrap call) on top of the existing HMAC signing. Cached in

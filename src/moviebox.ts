@@ -146,8 +146,53 @@ interface HostPoolAttemptResult<T> {
   authFailure: boolean;
 }
 
-function extractXUserToken(response: Response): string | null {
-  const xUser = response.headers.get('x-user');
+// ─── 2026-08-13 relay fix ──────────────────────────────────────────────────
+// MovieBox rejects Cloudflare Workers' egress IPs at the transport layer
+// (440/530 before app logic runs). Every outbound call now goes through a
+// small Vercel relay that re-issues the already-signed request from a
+// different IP, then hands the upstream status/headers/body back as JSON.
+// See moviebox-relay/README.md for the relay implementation and rationale.
+
+interface RelayResult {
+  status: number;
+  headers: Record<string, string>;
+  body: string;
+}
+
+async function relayFetch(
+  env: SigningEnv,
+  url: string,
+  method: 'GET' | 'POST',
+  headers: Record<string, string>,
+  bodyStr: string | null
+): Promise<RelayResult> {
+  const relayEndpoint = `${env.RELAY_URL.replace(/\/$/, '')}/api/relay`;
+
+  const relayResponse = await fetch(relayEndpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Relay-Secret': env.RELAY_SECRET,
+    },
+    body: JSON.stringify({ url, method, headers, body: bodyStr }),
+    signal: AbortSignal.timeout(20000), // relay hop adds latency — longer than the direct 12s timeout
+  });
+
+  if (!relayResponse.ok) {
+    // The relay itself errored (auth, disallowed host, or its own upstream
+    // fetch failure) — surface as a synthetic failed attempt so the caller's
+    // existing "trying next host" logic handles it the same as any other
+    // failure, rather than needing a separate code path.
+    const detail = await relayResponse.text().catch(() => '');
+    throw new Error(`relay error ${relayResponse.status}: ${detail}`);
+  }
+
+  const envelope = await relayResponse.json() as RelayResult;
+  return envelope;
+}
+
+function extractXUserTokenFromHeaders(headers: Record<string, string>): string | null {
+  const xUser = headers['x-user'] ?? headers['X-User'];
   if (!xUser) return null;
   try {
     const payload = JSON.parse(xUser) as { token?: string };
@@ -158,6 +203,7 @@ function extractXUserToken(response: Response): string | null {
 }
 
 async function attemptHostPool<T>(
+  env: SigningEnv,
   path: string,
   method: 'GET' | 'POST',
   params: Record<string, string | number> | undefined,
@@ -180,30 +226,25 @@ async function attemptHostPool<T>(
     const headers = await buildHeaders(method, urlStr, bodyStr, authToken);
 
     try {
-      const response = await fetch(urlStr, {
-        method,
-        headers,
-        body: bodyStr ?? undefined,
-        signal: AbortSignal.timeout(12000),
-      });
+      const relayResult = await relayFetch(env, urlStr, method, headers, bodyStr);
 
       sawAnyResponse = true;
 
-      const xUserToken = extractXUserToken(response);
+      const xUserToken = extractXUserTokenFromHeaders(relayResult.headers);
       if (xUserToken) freshXUserToken = xUserToken;
 
-      if (response.status === 401 || response.status === 403) {
-        console.warn(`[MovieBox] Host ${base} returned ${response.status} (auth) — trying next`);
+      if (relayResult.status === 401 || relayResult.status === 403) {
+        console.warn(`[MovieBox] Host ${base} returned ${relayResult.status} (auth) — trying next`);
         sawAuthFailure = true;
         continue;
       }
 
-      if (!response.ok) {
-        console.warn(`[MovieBox] Host ${base} returned ${response.status} — trying next`);
+      if (relayResult.status < 200 || relayResult.status >= 300) {
+        console.warn(`[MovieBox] Host ${base} returned ${relayResult.status} — trying next`);
         continue;
       }
 
-      const data = await response.json() as { code: number; message?: string; data?: T };
+      const data = JSON.parse(relayResult.body) as { code: number; message?: string; data?: T };
 
       if (data.code === 0) {
         return { data: (data.data ?? null) as T | null, freshXUserToken, authFailure: false };
@@ -257,6 +298,7 @@ export async function fetchWithHostPool<T>(
     try {
       authToken = await bootstrapAuthToken(env, async () => {
         const result = await attemptHostPool<unknown>(
+          env,
           PATHS.tabOperating,
           'GET',
           { page: 1, tabId: 0, version: '' },
@@ -271,7 +313,7 @@ export async function fetchWithHostPool<T>(
     }
   }
 
-  let result = await attemptHostPool<T>(path, method, params, bodyStr, authToken);
+  let result = await attemptHostPool<T>(env, path, method, params, bodyStr, authToken);
 
   // Absorb any rotated token immediately, regardless of whether this
   // particular call succeeded — keeps the cache current for next time.
@@ -290,6 +332,7 @@ export async function fetchWithHostPool<T>(
     try {
       authToken = await bootstrapAuthToken(env, async () => {
         const bootstrapResult = await attemptHostPool<unknown>(
+          env,
           PATHS.tabOperating,
           'GET',
           { page: 1, tabId: 0, version: '' },
@@ -303,7 +346,7 @@ export async function fetchWithHostPool<T>(
       return null;
     }
 
-    result = await attemptHostPool<T>(path, method, params, bodyStr, authToken);
+    result = await attemptHostPool<T>(env, path, method, params, bodyStr, authToken);
     return result.data;
   }
 

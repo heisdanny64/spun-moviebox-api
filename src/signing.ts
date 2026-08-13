@@ -141,6 +141,16 @@ export async function generateSignature(
 
 export interface SigningEnv {
   MOVIEBOX_SESSION_KV: KVNamespace;
+  // ─── 2026-08-13 relay fix ──────────────────────────────────────────────
+  // MovieBox rejects requests from Cloudflare Workers' egress IPs at the
+  // transport layer (HTTP 440/530, before app logic runs) — confirmed via
+  // side-by-side testing: identical signed requests succeed from a
+  // non-Cloudflare IP and fail uniformly across all 7 hosts from the Worker.
+  // All outbound calls now route through a small Vercel relay that just
+  // re-issues the already-signed request from a different IP. See
+  // moviebox.ts's attemptHostPool and moviebox-relay/README.md.
+  RELAY_URL: string;
+  RELAY_SECRET: string;
 }
 
 const KV_TOKEN_KEY = 'mobile_auth_token';
