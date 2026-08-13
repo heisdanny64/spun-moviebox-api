@@ -1,0 +1,8 @@
+{
+  "name": "spun-moviebox-relay",
+  "version": "1.0.0",
+  "description": "Generic egress relay for the Spün MovieBox worker — forwards signed requests from a non-Cloudflare IP via Vercel.",
+  "private": true,
+  "type": "module",
+  "license": "ISC"
+}
