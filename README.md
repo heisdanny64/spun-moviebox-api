@@ -103,6 +103,9 @@ The Android resource endpoint is resolution-filtered by default. Without passing
 |----------|----------|-------------|
 | `MOVIEBOX_SECRET` | ✅ Yes | Auth secret. Must match `X-Worker-Secret` on every request. Set via `wrangler secret put MOVIEBOX_SECRET` — never put in `wrangler.toml`. |
 | `NIGERIA_IP` | ✅ Yes | A Nigerian IP address for `X-Forwarded-For`. Ensures the H5 upstream returns the full Africa region feed. Update in Cloudflare dashboard without redeploying. Falls back to `197.210.65.1` (MTN Nigeria) if not set. |
+| `RELAY_URL` | ✅ Yes | Base URL of the Render relay, for example `https://spun-moviebox-relay.onrender.com`. The Worker appends `/api/relay`. Set via `wrangler secret put RELAY_URL`. |
+| `RELAY_SECRET` | ✅ Yes | Must exactly match the `RELAY_SECRET` configured on the Render relay. Set via `wrangler secret put RELAY_SECRET`; never commit it. |
+| `MOVIEBOX_SESSION_KV` | ✅ Yes | KV namespace binding used to cache the MovieBox bearer token between Worker isolates. Configure its namespace ID in `wrangler.toml`. |
 
 ---
 
@@ -148,6 +151,8 @@ wrangler secret put MOVIEBOX_SECRET
 
 **6. Configure `wrangler.toml`**
 
+Keep the `MOVIEBOX_SESSION_KV` binding configured in `wrangler.toml`. The relay settings are Worker secrets and should not be placed in that file.
+
 ```toml
 name = "spun-moviebox"
 main = "src/index.ts"
@@ -162,13 +167,25 @@ pattern = "your-domain.com/*"
 zone_name = "your-domain.com"
 ```
 
-**7. Deploy**
+**7. Configure the Render relay secrets**
+
+The relay is deployed separately from the Worker. Create a Render Web Service from the [`spun-moviebox-relay`](https://github.com/heisdanny64/spun-moviebox-relay) repository using `npm ci` as the build command, `npm start` as the start command, and `/health` as the health-check path. Set a long random `RELAY_SECRET` in Render, then set the matching values in Wrangler:
+
+```bash
+wrangler secret put RELAY_URL
+# enter: https://<service-name>.onrender.com
+
+wrangler secret put RELAY_SECRET
+# enter the exact value configured on Render
+```
+
+**8. Deploy**
 
 ```bash
 wrangler deploy
 ```
 
-**8. Test your deployment**
+**9. Test your deployment**
 
 ```bash
 curl -s "https://your-worker.workers.dev/health" | python3 -m json.tool

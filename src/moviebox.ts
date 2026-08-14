@@ -149,14 +149,42 @@ interface HostPoolAttemptResult<T> {
 // ─── 2026-08-13 relay fix ──────────────────────────────────────────────────
 // MovieBox rejects Cloudflare Workers' egress IPs at the transport layer
 // (440/530 before app logic runs). Every outbound call now goes through a
-// small Vercel relay that re-issues the already-signed request from a
+// small Render web service that re-issues the already-signed request from a
 // different IP, then hands the upstream status/headers/body back as JSON.
-// See moviebox-relay/README.md for the relay implementation and rationale.
+// See spun-moviebox-relay/README.md for the relay implementation and rationale.
 
 interface RelayResult {
   status: number;
   headers: Record<string, string>;
   body: string;
+}
+
+function parseRelayResult(value: unknown): RelayResult {
+  if (!value || typeof value !== 'object') {
+    throw new Error('relay returned a non-object response');
+  }
+
+  const envelope = value as Record<string, unknown>;
+  const status = envelope.status;
+  if (typeof status !== 'number' || !Number.isInteger(status) || status < 100 || status > 599) {
+    throw new Error('relay returned an invalid upstream status');
+  }
+  if (typeof envelope.body !== 'string') {
+    throw new Error('relay returned an invalid upstream body');
+  }
+  if (!envelope.headers || typeof envelope.headers !== 'object' || Array.isArray(envelope.headers)) {
+    throw new Error('relay returned invalid response headers');
+  }
+
+  const headers: Record<string, string> = {};
+  for (const [key, headerValue] of Object.entries(envelope.headers)) {
+    if (typeof headerValue !== 'string') {
+      throw new Error(`relay returned a non-string response header: ${key}`);
+    }
+    headers[key] = headerValue;
+  }
+
+  return { status, headers, body: envelope.body };
 }
 
 async function relayFetch(
@@ -166,7 +194,15 @@ async function relayFetch(
   headers: Record<string, string>,
   bodyStr: string | null
 ): Promise<RelayResult> {
-  const relayEndpoint = `${env.RELAY_URL.replace(/\/$/, '')}/api/relay`;
+  const relayBaseUrl = env.RELAY_URL?.trim().replace(/\/+$/, '');
+  if (!relayBaseUrl) {
+    throw new Error('RELAY_URL is not configured');
+  }
+  if (!env.RELAY_SECRET) {
+    throw new Error('RELAY_SECRET is not configured');
+  }
+
+  const relayEndpoint = `${relayBaseUrl}/api/relay`;
 
   const relayResponse = await fetch(relayEndpoint, {
     method: 'POST',
@@ -187,8 +223,14 @@ async function relayFetch(
     throw new Error(`relay error ${relayResponse.status}: ${detail}`);
   }
 
-  const envelope = await relayResponse.json() as RelayResult;
-  return envelope;
+  let rawEnvelope: unknown;
+  try {
+    rawEnvelope = await relayResponse.json();
+  } catch {
+    throw new Error('relay returned invalid JSON');
+  }
+
+  return parseRelayResult(rawEnvelope);
 }
 
 function extractXUserTokenFromHeaders(headers: Record<string, string>): string | null {

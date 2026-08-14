@@ -146,9 +146,9 @@ export interface SigningEnv {
   // transport layer (HTTP 440/530, before app logic runs) — confirmed via
   // side-by-side testing: identical signed requests succeed from a
   // non-Cloudflare IP and fail uniformly across all 7 hosts from the Worker.
-  // All outbound calls now route through a small Vercel relay that just
+  // All outbound calls now route through a small Render web service that
   // re-issues the already-signed request from a different IP. See
-  // moviebox.ts's attemptHostPool and moviebox-relay/README.md.
+  // moviebox.ts's attemptHostPool and spun-moviebox-relay/README.md.
   RELAY_URL: string;
   RELAY_SECRET: string;
 }
