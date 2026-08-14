@@ -1,6 +1,8 @@
 # Spün MovieBox Relay
 
-Authenticated egress relay for the `spun-moviebox` Cloudflare Worker. The Worker builds the fully signed MovieBox request, and this service re-issues that request from a Render web-service instance instead of directly from Cloudflare Workers egress.
+Authenticated egress relay for the [`spun-moviebox` Cloudflare Worker](https://github.com/heisdanny64/spun-moviebox-api). The Worker builds the fully signed MovieBox request, and this service re-issues that request from a Render web-service instance instead of directly from Cloudflare Workers egress.
+
+This repository is public and self-hostable. It contains no Render account credentials, relay secrets, MovieBox signing keys, or Worker secrets. All deployment secrets are supplied through Render's environment settings or local environment variables at runtime.
 
 ## Why this exists
 
@@ -70,13 +72,22 @@ Only the following hosts can be forwarded to:
 
 Update `ALLOWED_HOSTS` in `server.js` if MovieBox changes its mirror pool.
 
+## Public repository and security model
+
+Anyone can clone and deploy this relay, provided they have their own Render account or another Node.js host. The repository deliberately keeps `RELAY_SECRET` out of source control. The included `.gitignore` excludes `.env` files, local Wrangler state, dependency directories, logs, and other common local artifacts.
+
+The relay is not a general-purpose open proxy. It requires `X-Relay-Secret`, accepts only HTTPS upstream URLs on the explicit MovieBox allowlist, allows only `GET` and `POST`, strips hop-by-hop headers, enforces request-size limits, and applies an upstream timeout. The relay never needs the Worker's `MOVIEBOX_SECRET`, the MovieBox signing key, or the MovieBox bearer token as configuration; those remain part of the Worker request flow.
+
 ## Local development
 
 The service requires Node.js 20 or newer and has no runtime dependencies.
 
 ```bash
 npm ci
-RELAY_SECRET='replace-with-a-long-random-secret' npm start
+read -r -s -p 'Relay secret: ' RELAY_SECRET
+echo
+export RELAY_SECRET
+npm start
 ```
 
 The local service listens on `0.0.0.0:${PORT}`. It defaults to port `10000`, matching Render's default web-service port. Use `RELAY_TIMEOUT_MS` to override the upstream timeout, within the supported range of 1,000 to 60,000 milliseconds.
@@ -99,11 +110,12 @@ Render web services must bind to `0.0.0.0` and the `PORT` environment variable; 
 
 ### Option A: Render Blueprint
 
-1. In the Render Dashboard, create a new Blueprint and select this repository.
-2. Render will read `render.yaml`.
-3. Set the prompted `RELAY_SECRET` value to a long random secret. Do not commit the value to Git.
+1. In the Render Dashboard, create a new Blueprint and select this repository: [`heisdanny64/spun-moviebox-relay`](https://github.com/heisdanny64/spun-moviebox-relay).
+2. Render will read `render.yaml` and configure the Node runtime, build command, start command, and `/health` check.
+3. Set the prompted `RELAY_SECRET` value to a long random secret. Do not commit the value to Git or place it in `render.yaml`.
 4. Deploy the service and copy its `https://<service-name>.onrender.com` URL.
 5. Confirm `https://<service-name>.onrender.com/health` returns a `200` response.
+6. Configure the Worker repository's `RELAY_URL` with the base URL and its `RELAY_SECRET` with the exact same secret.
 
 ### Option B: Create a Web Service manually
 
@@ -121,6 +133,8 @@ Use the following values when creating a Render Web Service from this repository
 Render automatically redeploys from the configured Git branch when new commits are pushed, subject to the service's auto-deploy setting.
 
 ## Wiring the Cloudflare Worker
+
+The companion Worker repository is [`heisdanny64/spun-moviebox-api`](https://github.com/heisdanny64/spun-moviebox-api). Deploy the relay first, then set the two Worker secrets below.
 
 Set both Worker secrets to the same values used by Render:
 
