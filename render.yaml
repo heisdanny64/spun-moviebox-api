@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: spun-moviebox-relay
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: RELAY_SECRET
+        sync: false
+      - key: RELAY_TIMEOUT_MS
+        value: "15000"
