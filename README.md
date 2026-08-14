@@ -13,6 +13,8 @@
 
 ---
 
+> The API is currently down until I can fix the Cloudflare IP blocking 🤧
+
 ## 📖 Table of Contents
 
 - [Overview](#overview)
