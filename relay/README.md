@@ -2,6 +2,8 @@
 
 Authenticated egress relay for the [`spun-moviebox` Cloudflare Worker](https://github.com/heisdanny64/spun-moviebox-api). The Worker builds the fully signed MovieBox request, and this service re-issues that request from a Render web-service instance instead of directly from Cloudflare Workers egress.
 
+The relay lives in the `relay/` directory of the Worker monorepo. Its package manifest, lockfile, server, tests, and deployment documentation remain self-contained so Render can build it independently from the Worker.
+
 This repository is public and self-hostable. It contains no Render account credentials, relay secrets, MovieBox signing keys, or Worker secrets. All deployment secrets are supplied through Render's environment settings or local environment variables at runtime.
 
 ## Why this exists
@@ -110,8 +112,8 @@ Render web services must bind to `0.0.0.0` and the `PORT` environment variable; 
 
 ### Option A: Render Blueprint
 
-1. In the Render Dashboard, create a new Blueprint and select this repository: [`heisdanny64/spun-moviebox-relay`](https://github.com/heisdanny64/spun-moviebox-relay).
-2. Render will read `render.yaml` and configure the Node runtime, build command, start command, and `/health` check.
+1. In the Render Dashboard, create a new Blueprint and select the [`heisdanny64/spun-moviebox-api`](https://github.com/heisdanny64/spun-moviebox-api) repository.
+2. Render will read the root-level [`render.yaml`](../render.yaml), set `rootDir: relay`, and configure the Node runtime, build command, start command, and `/health` check.
 3. Set the prompted `RELAY_SECRET` value to a long random secret. Do not commit the value to Git or place it in `render.yaml`.
 4. Deploy the service and copy its `https://<service-name>.onrender.com` URL.
 5. Confirm `https://<service-name>.onrender.com/health` returns a `200` response.
@@ -134,7 +136,7 @@ Render automatically redeploys from the configured Git branch when new commits a
 
 ## Wiring the Cloudflare Worker
 
-The companion Worker repository is [`heisdanny64/spun-moviebox-api`](https://github.com/heisdanny64/spun-moviebox-api). Deploy the relay first, then set the two Worker secrets below.
+The Worker and relay are now maintained in the same [`heisdanny64/spun-moviebox-api`](https://github.com/heisdanny64/spun-moviebox-api) monorepo. Deploy the Render relay from the root Blueprint first, then set the two Worker secrets below.
 
 Set both Worker secrets to the same values used by Render:
 
@@ -149,3 +151,7 @@ wrangler secret put RELAY_SECRET
 The Worker appends `/api/relay` to `RELAY_URL`. Do not include `/api/relay` in the secret value or URL; use only the service base URL.
 
 The Worker still owns all MovieBox authentication and signing. The relay must never receive the signing key or be configured with a MovieBox application secret.
+
+## License
+
+The original Worker, relay, deployment configuration, tests, and documentation in this repository are licensed under the [MIT License](../LICENSE). The license does not grant rights to MovieBox's service, trademarks, media, CDN assets, or separately licensed dependencies.

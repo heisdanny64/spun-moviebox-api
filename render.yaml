@@ -2,6 +2,7 @@ services:
   - type: web
     name: spun-moviebox-relay
     runtime: node
+    rootDir: relay
     plan: free
     buildCommand: npm ci
     startCommand: npm start

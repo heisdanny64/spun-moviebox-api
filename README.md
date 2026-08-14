@@ -47,7 +47,7 @@ This worker wraps two separate MovieBox API surfaces — the **Android mobile AP
 
 All routes except `/` and `/health` are protected by an `X-Worker-Secret` header.
 
-The Android routes use the companion [Spün MovieBox Relay](https://github.com/heisdanny64/spun-moviebox-relay) deployed as a Render Web Service. The Worker keeps the MovieBox signing and bearer-token logic; the relay provides non-Cloudflare egress for the already signed upstream request. The H5 homepage routes continue to run directly from the Worker.
+The Android routes use the companion [Spün MovieBox Relay](./relay/README.md) deployed as a Render Web Service from this same repository. The Worker keeps the MovieBox signing and bearer-token logic; the relay provides non-Cloudflare egress for the already signed upstream request. The H5 homepage routes continue to run directly from the Worker.
 
 ---
 
@@ -77,7 +77,7 @@ Cloudflare Worker (src/index.ts)
                           └── netnaija.film, h5.aoneroom.com, moviebox.pk
 ```
 
-The relay source and its Render Blueprint are maintained in the companion repository: [github.com/heisdanny64/spun-moviebox-relay](https://github.com/heisdanny64/spun-moviebox-relay).
+The relay source is maintained in [`relay/`](./relay/), with its Render Blueprint at the repository root in [`render.yaml`](./render.yaml). The relay has its own package manifest, lockfile, tests, and deployment README so Render can build it independently from the Worker.
 
 ### Why the Nigerian IP pin?
 
@@ -103,7 +103,7 @@ The Android resource endpoint is resolution-filtered by default. Without passing
 |----------|----------|-------------|
 | `MOVIEBOX_SECRET` | ✅ Yes | Auth secret. Must match `X-Worker-Secret` on every request. Set via `wrangler secret put MOVIEBOX_SECRET` — never put in `wrangler.toml`. |
 | `NIGERIA_IP` | Optional | A Nigerian IP address for `X-Forwarded-For`. It helps the H5 upstream return the Africa-region feed and falls back to the default in code when omitted. |
-| `RELAY_URL` | ✅ Yes | Base URL of the [Render relay](https://github.com/heisdanny64/spun-moviebox-relay), for example `https://spun-moviebox-relay.onrender.com`. The Worker appends `/api/relay`. Set via `wrangler secret put RELAY_URL`. |
+| `RELAY_URL` | ✅ Yes | Base URL of the [Render relay](./relay/README.md), for example `https://spun-moviebox-relay.onrender.com`. The Worker appends `/api/relay`. Set via `wrangler secret put RELAY_URL`. |
 | `RELAY_SECRET` | ✅ Yes | Must exactly match the `RELAY_SECRET` configured on Render. Set via `wrangler secret put RELAY_SECRET`; never commit it. |
 | `MOVIEBOX_SESSION_KV` | ✅ Yes | KV namespace binding used to cache the MovieBox bearer token between Worker isolates. Configure its namespace ID in `wrangler.toml`. |
 
@@ -140,9 +140,11 @@ wrangler kv namespace create MOVIEBOX_SESSION_KV
 
 Copy the returned production namespace ID into the `MOVIEBOX_SESSION_KV` binding in `wrangler.toml`. Do not commit local Wrangler state or secret files.
 
-**3. Deploy the companion relay first**
+**3. Deploy the relay from this monorepo**
 
-Follow the [Spün MovieBox Relay deployment guide](https://github.com/heisdanny64/spun-moviebox-relay#deploying-to-render). The relay repository includes a `render.yaml` Blueprint, a Node start command, a public `/health` endpoint, and no committed credentials.
+Create or update a Render Web Service from this repository. The root-level [`render.yaml`](./render.yaml) sets `rootDir: relay`, so Render builds and starts only the relay service even though the Worker is in the same repository. The relay's Node commands are `npm ci` and `npm start`, and its health-check path is `/health`.
+
+If you already have the relay deployed from the former standalone repository, update that Render service to use this repository and set its Root Directory to `relay`, or create the new Blueprint service first and switch traffic after health verification. Do not delete the old service until the new one responds successfully.
 
 Set a long random `RELAY_SECRET` as a Render environment secret. Verify the service before continuing:
 
@@ -629,7 +631,7 @@ All other subject types are filtered out from responses.
 
 ## Acknowledgements
 
-**[moviebox-api](https://github.com/Simatwa/moviebox-api) by Simatwa** — The foundation this worker is built on. The host pool URLs (both Android mobile and H5 web), the request signing algorithm, and the API endpoint structure were all discovered through their Python library. None of this would have been possible without their reverse engineering work.
+**[moviebox-api](https://github.com/Simatwa/moviebox-api) by Simatwa** — Consulted as a reference while discovering MovieBox mirror hosts, endpoint behavior, and request patterns. The Worker and relay implementation in this repository were written independently. This acknowledgement does not imply that this project contains copied code from that repository or that it is licensed by Simatwa.
 
 **[Claude by Anthropic](https://claude.ai)** — Instrumental in building, debugging, and iterating on this worker across multiple sessions. From diagnosing the `perPage: 10` upstream quirk that was silently breaking every stream/download request, to figuring out the `se=0&ep=0` bulk fetch pattern, to tracking down the Nigerian IP geolocation issue that was truncating the home feed — Claude was a genuine engineering partner throughout.
 
@@ -637,14 +639,11 @@ All other subject types are filtered out from responses.
 
 ## License
 
-This project is licensed under the **Business Source License 1.1 (BSL 1.1)**.
+This project is licensed under the **MIT License**. The license covers the original Worker, relay, deployment configuration, tests, and documentation in this repository.
 
-- ✅ Free for personal and non-commercial use
-- ✅ You may study, fork, and self-host
-- ❌ You may not sell, sublicense, or use this in a commercial product without written permission from the author
-- 🔄 Converts to MIT License 4 years from the date of each release
+The MIT License does not grant rights to MovieBox's service, trademarks, media, CDN assets, or separately licensed dependencies. See the acknowledgement and disclaimer sections above and review third-party terms before redistribution.
 
-See [LICENSE](./LICENSE) for full terms.
+See [LICENSE](./LICENSE) for the full license text.
 
 For commercial licensing inquiries, contact **Spün**.
 
