@@ -13,14 +13,13 @@
 
 ---
 
-> The API is currently down until I can fix the Cloudflare IP blocking 🤧
-
 ## 📖 Table of Contents
 
 - [Overview](#overview)
 - [Architecture](#architecture)
 - [Environment Variables](#environment-variables)
 - [Deployment](#deployment)
+- [Local Smoke Test](#local-smoke-test)
 - [API Reference](#api-reference)
   - [Public Routes](#public-routes)
   - [Search](#post-search)
@@ -48,6 +47,8 @@ This worker wraps two separate MovieBox API surfaces — the **Android mobile AP
 
 All routes except `/` and `/health` are protected by an `X-Worker-Secret` header.
 
+The Android routes use the companion [Spün MovieBox Relay](https://github.com/heisdanny64/spun-moviebox-relay) deployed as a Render Web Service. The Worker keeps the MovieBox signing and bearer-token logic; the relay provides non-Cloudflare egress for the already signed upstream request. The H5 homepage routes continue to run directly from the Worker.
+
 ---
 
 ## Architecture
@@ -60,24 +61,23 @@ Cloudflare Worker (src/index.ts)
       │
       ├── Android Routes (search, info, season, stream, download)
       │         │
-      │         └── fetchWithHostPool() → 7-host pool with sequential fallback
-      │                   │               + HMAC-MD5 signing (src/signing.ts)
-      │                   └── api6.aoneroom.com
-      │                       api5.aoneroom.com
-      │                       api4.aoneroom.com
-      │                       api4sg.aoneroom.com
-      │                       api3.aoneroom.com
-      │                       api6sg.aoneroom.com
-      │                       api.inmoviebox.com
+      │         └── fetchWithHostPool()
+      │                   │
+      │                   ├── Builds HMAC-MD5 signature + bearer token
+      │                   └── POSTs the signed request to the
+      │                       Render relay (/api/relay)
+      │                                  │
+      │                                  └── Sequentially tries the
+      │                                      allowed MovieBox mirrors
       │
       └── H5 Routes (home, home/rows, home/subjects)
                 │
-                └── fetchH5Home() → 2-host fallback, no signing
+                └── fetchH5Home() → direct 2-host fallback, no signing
                           │         + X-Forwarded-For Nigerian IP pin
-                          └── netnaija.film (primary)
-                              h5.aoneroom.com
-                              moviebox.pk
+                          └── netnaija.film, h5.aoneroom.com, moviebox.pk
 ```
+
+The relay source and its Render Blueprint are maintained in the companion repository: [github.com/heisdanny64/spun-moviebox-relay](https://github.com/heisdanny64/spun-moviebox-relay).
 
 ### Why the Nigerian IP pin?
 
@@ -102,9 +102,9 @@ The Android resource endpoint is resolution-filtered by default. Without passing
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `MOVIEBOX_SECRET` | ✅ Yes | Auth secret. Must match `X-Worker-Secret` on every request. Set via `wrangler secret put MOVIEBOX_SECRET` — never put in `wrangler.toml`. |
-| `NIGERIA_IP` | ✅ Yes | A Nigerian IP address for `X-Forwarded-For`. Ensures the H5 upstream returns the full Africa region feed. Update in Cloudflare dashboard without redeploying. Falls back to `197.210.65.1` (MTN Nigeria) if not set. |
-| `RELAY_URL` | ✅ Yes | Base URL of the Render relay, for example `https://spun-moviebox-relay.onrender.com`. The Worker appends `/api/relay`. Set via `wrangler secret put RELAY_URL`. |
-| `RELAY_SECRET` | ✅ Yes | Must exactly match the `RELAY_SECRET` configured on the Render relay. Set via `wrangler secret put RELAY_SECRET`; never commit it. |
+| `NIGERIA_IP` | Optional | A Nigerian IP address for `X-Forwarded-For`. It helps the H5 upstream return the Africa-region feed and falls back to the default in code when omitted. |
+| `RELAY_URL` | ✅ Yes | Base URL of the [Render relay](https://github.com/heisdanny64/spun-moviebox-relay), for example `https://spun-moviebox-relay.onrender.com`. The Worker appends `/api/relay`. Set via `wrangler secret put RELAY_URL`. |
+| `RELAY_SECRET` | ✅ Yes | Must exactly match the `RELAY_SECRET` configured on Render. Set via `wrangler secret put RELAY_SECRET`; never commit it. |
 | `MOVIEBOX_SESSION_KV` | ✅ Yes | KV namespace binding used to cache the MovieBox bearer token between Worker isolates. Configure its namespace ID in `wrangler.toml`. |
 
 ---
@@ -115,83 +115,92 @@ The Android resource endpoint is resolution-filtered by default. Without passing
 
 - [Node.js](https://nodejs.org/) 18+
 - [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/) — `npm install -g wrangler`
-- A Cloudflare account with Workers enabled
+- A Cloudflare account with Workers and KV enabled
+- A Render account if you are deploying the companion relay yourself
 
 ### Steps
 
-**1. Star and fork this repo**
-
-Hit ⭐ Star then click **Fork** at the top right of this page.
-
-**2. Clone your fork**
+**1. Clone the Worker repository**
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/spun-moviebox-api
+git clone https://github.com/heisdanny64/spun-moviebox-api.git
 cd spun-moviebox-api
+npm ci
 ```
 
-**3. Install dependencies**
+Anyone may clone and self-host this repository. No account credentials, API secrets, or deployment tokens are stored in the repository.
+
+**2. Create or verify the Worker KV namespace**
+
+Create a namespace if you do not already have one:
 
 ```bash
-npm install
+wrangler kv namespace create MOVIEBOX_SESSION_KV
 ```
 
-**4. Authenticate Wrangler**
+Copy the returned production namespace ID into the `MOVIEBOX_SESSION_KV` binding in `wrangler.toml`. Do not commit local Wrangler state or secret files.
+
+**3. Deploy the companion relay first**
+
+Follow the [Spün MovieBox Relay deployment guide](https://github.com/heisdanny64/spun-moviebox-relay#deploying-to-render). The relay repository includes a `render.yaml` Blueprint, a Node start command, a public `/health` endpoint, and no committed credentials.
+
+Set a long random `RELAY_SECRET` as a Render environment secret. Verify the service before continuing:
+
+```bash
+curl -sS https://<service-name>.onrender.com/health
+```
+
+**4. Authenticate Wrangler and configure Worker secrets**
 
 ```bash
 wrangler login
-```
-
-**5. Set your secret**
-
-```bash
 wrangler secret put MOVIEBOX_SECRET
-# Enter your chosen secret when prompted
-```
-
-**6. Configure `wrangler.toml`**
-
-Keep the `MOVIEBOX_SESSION_KV` binding configured in `wrangler.toml`. The relay settings are Worker secrets and should not be placed in that file.
-
-```toml
-name = "spun-moviebox"
-main = "src/index.ts"
-compatibility_date = "2024-11-01"
-compatibility_flags = ["nodejs_compat"]
-
-[vars]
-NIGERIA_IP = "YOUR_NIGERIAN_IP"  # curl https://api.ipify.org to get yours
-
-[[routes]]
-pattern = "your-domain.com/*"
-zone_name = "your-domain.com"
-```
-
-**7. Configure the Render relay secrets**
-
-The relay is deployed separately from the Worker. Create a Render Web Service from the [`spun-moviebox-relay`](https://github.com/heisdanny64/spun-moviebox-relay) repository using `npm ci` as the build command, `npm start` as the start command, and `/health` as the health-check path. Set a long random `RELAY_SECRET` in Render, then set the matching values in Wrangler:
-
-```bash
 wrangler secret put RELAY_URL
 # enter: https://<service-name>.onrender.com
-
 wrangler secret put RELAY_SECRET
 # enter the exact value configured on Render
 ```
 
-**8. Deploy**
+`RELAY_URL` must contain only the Render service base URL. The Worker appends `/api/relay` automatically. Keep all secret values in Wrangler and Render's secret stores; never place them in `wrangler.toml`, shell scripts, or commits.
+
+**5. Configure non-secret Worker variables**
+
+Edit `wrangler.toml` only for non-secret settings such as `NIGERIA_IP`, the KV namespace ID, and your Cloudflare route. The repository's sample configuration contains no user-specific credential values.
+
+**6. Deploy the Worker**
 
 ```bash
 wrangler deploy
 ```
 
-**9. Test your deployment**
+**7. Run the local smoke test**
+
+The repository includes [`scripts/smoke-test.sh`](./scripts/smoke-test.sh). It prompts for the Worker secret without writing it to disk and exercises public routes, authenticated Android routes through the relay, and H5 routes:
 
 ```bash
-curl -s "https://your-worker.workers.dev/health" | python3 -m json.tool
+chmod +x scripts/smoke-test.sh
+./scripts/smoke-test.sh
 ```
 
+Use `RUN_EXPENSIVE=1` to additionally exercise `/stream`, `/stream/:subjectId/all`, and `/download/:subjectId`.
+
 ---
+
+## Local Smoke Test
+
+Run the complete non-expensive smoke suite against a deployed Worker:
+
+```bash
+./scripts/smoke-test.sh
+```
+
+For automation, provide the secret through the environment rather than committing it:
+
+```bash
+WORKER_SECRET='your-worker-secret' ./scripts/smoke-test.sh
+```
+
+The script discovers a subject ID from `/search` and uses it for `/info` and `/season`. It also discovers an `opId` from `/home/rows` and uses it for `/home/subjects`. It exits with status `1` if any tested route fails.
 
 ## API Reference
 
