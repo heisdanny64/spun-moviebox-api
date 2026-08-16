@@ -117,6 +117,7 @@ request_with_body() {
 media_smoke() {
   local name="$1"
   local media_url="$2"
+  local expected_mode="${3:-inline}"
   local headers_file="$TMP_DIR/$(body_name "$name").headers"
   local status
 
@@ -138,7 +139,17 @@ media_smoke() {
     return 1
   fi
 
-  pass "$name (HTTP $status, ranged media response)"
+  if [[ "$expected_mode" == "attachment" ]]; then
+    if ! grep -qiE '^content-disposition:[[:space:]]*attachment;' "$headers_file"; then
+      fail "$name" 'expected Content-Disposition: attachment'
+      return 1
+    fi
+  elif grep -qiE '^content-disposition:[[:space:]]*attachment;' "$headers_file"; then
+    fail "$name" 'stream response unexpectedly forced attachment download'
+    return 1
+  fi
+
+  pass "$name (HTTP $status, ranged media response, $expected_mode)"
 }
 
 extract_first_value() {
@@ -200,7 +211,14 @@ if [[ "$RUN_EXPENSIVE" == "1" && -n "$SUBJECT_ID" ]]; then
     fi
   fi
   request "stream_all_${SUBJECT_ID}" GET "/stream/$SUBJECT_ID/all" 200 || true
-  request "download_${SUBJECT_ID}" GET "/download/$SUBJECT_ID" 200 || true
+  if request "download_${SUBJECT_ID}" GET "/download/$SUBJECT_ID" 200; then
+    download_url="$(extract_first_value url "$LAST_BODY_FILE")" || true
+    if [[ -n "${download_url:-}" ]]; then
+      media_smoke "download_media_${SUBJECT_ID}" "$download_url" attachment || true
+    else
+      fail "download_media_${SUBJECT_ID}" 'download response did not contain a media URL'
+    fi
+  fi
 else
   skip 'stream/download routes' 'set RUN_EXPENSIVE=1 to exercise resource-heavy routes'
 fi

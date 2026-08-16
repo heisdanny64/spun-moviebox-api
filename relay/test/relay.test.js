@@ -119,6 +119,29 @@ test('forwards signed media requests with range and Android playback headers', a
   assert.equal(request[0], targetUrl);
   assert.equal(request[1].headers.Range, 'bytes=0-1023');
   assert.match(request[1].headers['User-Agent'], /com\.community\.oneroom/);
+  assert.equal(result.headers['content-disposition'], undefined);
+});
+
+test('marks download media responses as attachments', async () => {
+  const secret = 'correct';
+  const targetUrl = 'https://bcdn.hakunaymatata.com/resource/h265/video-file.mp4?sign=upstream&t=1786838688';
+  const expires = 1786838688;
+
+  const result = await forwardMediaRequest({
+    targetUrl,
+    expires,
+    suppliedSignature: mediaSignature(expires, targetUrl, secret),
+    download: true,
+    expectedSecret: secret,
+    fetchImpl: async () => ({
+      status: 200,
+      headers: fakeHeaders({ 'content-type': 'video/mp4' }),
+      body: null,
+    }),
+  });
+
+  assert.equal(result.statusCode, 200);
+  assert.equal(result.headers['content-disposition'], 'attachment; filename="video-file.mp4"');
 });
 
 test('rejects unsigned or non-CDN media targets before fetching', async () => {

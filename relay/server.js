@@ -61,6 +61,12 @@ function mediaSignature(expires, targetUrl, secret) {
   return createHmac('sha256', secret).update(`${expires}\n${targetUrl}`).digest('hex');
 }
 
+function mediaFilename(target) {
+  const rawName = decodeURIComponent(target.pathname.split('/').pop() || 'moviebox.mp4');
+  const safeName = rawName.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120);
+  return safeName || 'moviebox.mp4';
+}
+
 function validateMediaTarget(value) {
   if (typeof value !== 'string' || value.length === 0 || value.length > 2_048) {
     return { error: 'missing or invalid media url' };
@@ -186,6 +192,7 @@ export async function forwardMediaRequest({
   expectedSecret,
   fetchImpl = fetch,
   timeoutMs = configuredTimeoutMs(),
+  download = false,
 }) {
   if (!expectedSecret) return { statusCode: 500, payload: { error: 'RELAY_SECRET not configured on server' } };
   if (!Number.isInteger(expires)) return { statusCode: 400, payload: { error: 'invalid media expiry' } };
@@ -219,6 +226,7 @@ export async function forwardMediaRequest({
       const value = upstreamResponse.headers.get(name);
       if (value) headers[name] = value;
     }
+    if (download) headers['content-disposition'] = `attachment; filename="${mediaFilename(targetResult.target)}"`;
 
     return { statusCode: upstreamResponse.status, headers, body: upstreamResponse.body };
   } catch (error) {
@@ -354,6 +362,7 @@ export function createServer({ expectedSecret = process.env.RELAY_SECRET, fetchI
         suppliedSignature: query.get('s'),
         range: request.headers.range,
         method: request.method,
+        download: query.get('download') === '1',
         expectedSecret,
         fetchImpl,
       });

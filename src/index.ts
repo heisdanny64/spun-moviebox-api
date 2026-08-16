@@ -148,7 +148,7 @@ async function signMediaProxyTarget(expires: number, targetUrl: string, secret: 
   return Array.from(new Uint8Array(signature), (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
-async function proxyMediaUrl(resourceLink: string, env: Env): Promise<string> {
+async function proxyMediaUrl(resourceLink: string, env: Env, download = false): Promise<string> {
   const relayBaseUrl = env.RELAY_URL?.trim().replace(/\/+$/, '');
   const relaySecret = env.RELAY_SECRET?.trim();
   let target: URL;
@@ -169,10 +169,11 @@ async function proxyMediaUrl(resourceLink: string, env: Env): Promise<string> {
   const proxy = new URL(`${relayBaseUrl}/media/${base64UrlEncode(target.toString())}`);
   proxy.searchParams.set('e', String(expires));
   proxy.searchParams.set('s', signature);
+  if (download) proxy.searchParams.set('download', '1');
   return proxy.toString();
 }
 
-async function mapResourceItem(item: MBResourceItem, env: Env) {
+async function mapResourceItem(item: MBResourceItem, env: Env, download = false) {
   const sizeMb = item.size
     ? `${Math.round(parseInt(item.size) / (1024 * 1024))} MB`
     : null;
@@ -186,7 +187,7 @@ async function mapResourceItem(item: MBResourceItem, env: Env) {
   return {
     quality:    `${item.resolution}p`,
     resolution: item.resolution,
-    url:        await proxyMediaUrl(item.resourceLink, env),
+    url:        await proxyMediaUrl(item.resourceLink, env, download),
     format:     'mp4' as const,
     size:       sizeMb,
     codecName:  item.codecName ?? null,
@@ -541,7 +542,7 @@ async function handleDownload(subjectId: string, env: Env): Promise<Response> {
 
     const q = `${item.resolution}p`;
     if (!qualities.find((x) => x.quality === q)) {
-      qualities.push(await mapResourceItem(item, env));
+      qualities.push(await mapResourceItem(item, env, true));
     }
   }
 

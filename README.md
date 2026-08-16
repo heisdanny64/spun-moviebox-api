@@ -510,6 +510,8 @@ curl -s "https://your-worker.workers.dev/download/5139196938264400928" \
 
 The Worker does not expose the upstream CDN URL directly anymore. For `bcdn.hakunaymatata.com` resources, it signs a relay URL that preserves HTTP range requests and streams the media response from Render. This is required because the upstream CDN rejects browser-like playback requests with `428 Forbidden` while accepting the Android-style request made by the relay.
 
+Stream URLs remain inline-playable. URLs returned by `/download/:subjectId` include a download signal, and the relay adds `Content-Disposition: attachment` so browsers and download managers save the media instead of opening it as an inline stream.
+
 If the relay service is redeployed under a different hostname, keep the Worker’s `RELAY_URL` secret synchronized with that hostname. After a Render deployment, verify the media path with a fresh `/stream` response and a small ranged request from a media client.
 
 ---
