@@ -391,7 +391,7 @@ curl -s "https://your-worker.workers.dev/stream/5139196938264400928?se=5&ep=8" \
     {
       "quality": "1080p",
       "resolution": 1080,
-      "url": "https://bcdn.hakunaymatata.com/resource/....mp4?sign=...&t=...",
+      "url": "https://spun-moviebox-relay.onrender.com/media/<encoded-target>?e=...&s=...",
       "format": "mp4",
       "size": "426 MB",
       "codecName": "hevc",
@@ -403,7 +403,7 @@ curl -s "https://your-worker.workers.dev/stream/5139196938264400928?se=5&ep=8" \
     {
       "quality": "480p",
       "resolution": 480,
-      "url": "https://bcdn.hakunaymatata.com/resource/....mp4?sign=...&t=...",
+      "url": "https://spun-moviebox-relay.onrender.com/media/<encoded-target>?e=...&s=...",
       "format": "mp4",
       "size": "211 MB",
       "codecName": "hevc",
@@ -417,7 +417,9 @@ curl -s "https://your-worker.workers.dev/stream/5139196938264400928?se=5&ep=8" \
 }
 ```
 
-> **Note:** Stream URLs are signed and time-limited by the upstream CDN. Fetch them fresh on each playback session — do not cache the URLs themselves.
+> **Note:** Stream and download URLs are signed media-proxy URLs returned by the Render relay. The relay forwards browser and player range requests to the MovieBox CDN using the accepted Android-style playback headers. Fetch them fresh on each playback session because the upstream CDN controls the lifetime of the embedded signed URL; do not cache the URLs themselves.
+>
+> The Render service must be deployed from the monorepo’s `relay/` directory with the same `RELAY_SECRET` configured in the Worker and Render. The relay media proxy only permits signed URLs for `bcdn.hakunaymatata.com`; it is not an open proxy.
 
 ---
 
@@ -442,7 +444,7 @@ curl -s "https://your-worker.workers.dev/stream/7618577843911803416/all" \
             {
               "quality": "720p",
               "resolution": 720,
-              "url": "https://bcdn.hakunaymatata.com/...",
+              "url": "https://spun-moviebox-relay.onrender.com/media/<encoded-target>?e=...&s=...",
               "format": "mp4",
               "size": "53 MB",
               "codecName": "h264",
@@ -484,7 +486,7 @@ curl -s "https://your-worker.workers.dev/download/5139196938264400928" \
             {
               "quality": "1080p",
               "resolution": 1080,
-              "url": "https://bcdn.hakunaymatata.com/...",
+              "url": "https://spun-moviebox-relay.onrender.com/media/<encoded-target>?e=...&s=...",
               "format": "mp4",
               "size": "360 MB",
               "codecName": "hevc",
@@ -501,6 +503,14 @@ curl -s "https://your-worker.workers.dev/download/5139196938264400928" \
   "total_seasons": 5
 }
 ```
+
+---
+
+### Media delivery
+
+The Worker does not expose the upstream CDN URL directly anymore. For `bcdn.hakunaymatata.com` resources, it signs a relay URL that preserves HTTP range requests and streams the media response from Render. This is required because the upstream CDN rejects browser-like playback requests with `428 Forbidden` while accepting the Android-style request made by the relay.
+
+If the relay service is redeployed under a different hostname, keep the Worker’s `RELAY_URL` secret synchronized with that hostname. After a Render deployment, verify the media path with a fresh `/stream` response and a small ranged request from a media client.
 
 ---
 

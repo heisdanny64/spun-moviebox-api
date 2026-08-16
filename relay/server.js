@@ -1,11 +1,14 @@
 import http from 'node:http';
-import { timingSafeEqual } from 'node:crypto';
+import { createHmac, timingSafeEqual } from 'node:crypto';
+import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 
 const DEFAULT_PORT = 10000;
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_REQUEST_BODY_BYTES = 64 * 1024;
 const MAX_FORWARD_BODY_BYTES = 1 * 1024 * 1024;
+const MEDIA_USER_AGENT = 'com.community.oneroom/50020044 (Linux; U; Android 13; en_US; 23078RKD5C; Build/TQ2A.230405.003; Cronet/135.0.7012.3)';
+const MEDIA_ALLOWED_HOSTS = new Set(['bcdn.hakunaymatata.com']);
 
 export const ALLOWED_HOSTS = new Set([
   'api6.aoneroom.com',
@@ -52,6 +55,31 @@ function secretsMatch(supplied, expected) {
   const suppliedBytes = Buffer.from(supplied);
   const expectedBytes = Buffer.from(expected);
   return suppliedBytes.length === expectedBytes.length && timingSafeEqual(suppliedBytes, expectedBytes);
+}
+
+function mediaSignature(expires, targetUrl, secret) {
+  return createHmac('sha256', secret).update(`${expires}\n${targetUrl}`).digest('hex');
+}
+
+function validateMediaTarget(value) {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 2_048) {
+    return { error: 'missing or invalid media url' };
+  }
+
+  let target;
+  try {
+    target = new URL(value);
+  } catch {
+    return { error: 'invalid media url' };
+  }
+
+  const hostname = target.hostname.toLowerCase();
+  if (target.protocol !== 'https:') return { error: 'media url must use https' };
+  if (target.username || target.password || target.port) return { error: 'media url must not contain credentials or a custom port' };
+  if (!MEDIA_ALLOWED_HOSTS.has(hostname)) return { error: `media host not allowed: ${hostname}` };
+  if (!target.searchParams.get('sign') || !target.searchParams.get('t')) return { error: 'media url must contain sign and t parameters' };
+
+  return { target };
 }
 
 function validateTargetUrl(value) {
@@ -149,6 +177,61 @@ function createAbortSignal(timeoutMs) {
   return { controller, timer };
 }
 
+export async function forwardMediaRequest({
+  targetUrl,
+  expires,
+  suppliedSignature,
+  range,
+  method = 'GET',
+  expectedSecret,
+  fetchImpl = fetch,
+  timeoutMs = configuredTimeoutMs(),
+}) {
+  if (!expectedSecret) return { statusCode: 500, payload: { error: 'RELAY_SECRET not configured on server' } };
+  if (!Number.isInteger(expires)) return { statusCode: 400, payload: { error: 'invalid media expiry' } };
+
+  const targetResult = validateMediaTarget(targetUrl);
+  if (targetResult.error) return { statusCode: 403, payload: { error: targetResult.error } };
+  const targetExpires = Number.parseInt(targetResult.target.searchParams.get('t') ?? '', 10);
+  if (targetExpires !== expires) return { statusCode: 400, payload: { error: 'media expiry does not match target url' } };
+  if (!secretsMatch(suppliedSignature, mediaSignature(expires, targetResult.target.toString(), expectedSecret))) {
+    return { statusCode: 401, payload: { error: 'unauthorized' } };
+  }
+  if (!['GET', 'HEAD'].includes(method)) return { statusCode: 405, payload: { error: 'media method must be GET or HEAD' } };
+
+  const { controller, timer } = createAbortSignal(timeoutMs);
+  try {
+    const upstreamHeaders = {
+      Accept: 'video/mp4,video/*;q=0.9,*/*;q=0.8',
+      'User-Agent': MEDIA_USER_AGENT,
+    };
+    if (typeof range === 'string' && range.length <= 200) upstreamHeaders.Range = range;
+
+    const upstreamResponse = await fetchImpl(targetResult.target.toString(), {
+      method,
+      headers: upstreamHeaders,
+      redirect: 'follow',
+      signal: controller.signal,
+    });
+
+    const headers = {};
+    for (const name of ['accept-ranges', 'cache-control', 'content-length', 'content-range', 'content-type', 'etag', 'last-modified']) {
+      const value = upstreamResponse.headers.get(name);
+      if (value) headers[name] = value;
+    }
+
+    return { statusCode: upstreamResponse.status, headers, body: upstreamResponse.body };
+  } catch (error) {
+    const isTimeout = error?.name === 'AbortError';
+    return {
+      statusCode: 502,
+      payload: { error: isTimeout ? 'media upstream timeout' : 'media upstream fetch failed' },
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function forwardRequest({ suppliedSecret, payload, expectedSecret, fetchImpl = fetch, timeoutMs = configuredTimeoutMs() }) {
   if (!expectedSecret) {
     return { statusCode: 500, payload: { error: 'RELAY_SECRET not configured on server' } };
@@ -196,6 +279,21 @@ export async function forwardRequest({ suppliedSecret, payload, expectedSecret, 
   }
 }
 
+function sendMediaResponse(response, result, method) {
+  if (result.payload) {
+    sendJson(response, result.statusCode, result.payload);
+    return;
+  }
+
+  response.writeHead(result.statusCode, result.headers);
+  if (method === 'HEAD' || !result.body) {
+    response.end();
+    return;
+  }
+
+  Readable.fromWeb(result.body).pipe(response);
+}
+
 function sendJson(response, statusCode, payload) {
   const body = JSON.stringify(payload);
   response.writeHead(statusCode, {
@@ -236,6 +334,30 @@ export function createServer({ expectedSecret = process.env.RELAY_SECRET, fetchI
 
     if (request.method === 'GET' && (pathname === '/health' || pathname === '/api/health')) {
       sendJson(response, 200, { status: 'ok', service: 'spun-moviebox-relay', ts: Date.now() });
+      return;
+    }
+
+    const mediaMatch = pathname.match(/^\/media\/([^/]+)$/);
+    if (mediaMatch && (request.method === 'GET' || request.method === 'HEAD')) {
+      const query = new URL(request.url ?? '/', 'http://localhost').searchParams;
+      let targetUrl;
+      try {
+        targetUrl = Buffer.from(mediaMatch[1].replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (mediaMatch[1].length % 4)) % 4), 'base64').toString('utf8');
+      } catch {
+        sendJson(response, 400, { error: 'invalid media target encoding' });
+        return;
+      }
+
+      const result = await forwardMediaRequest({
+        targetUrl,
+        expires: Number.parseInt(query.get('e') ?? '', 10),
+        suppliedSignature: query.get('s'),
+        range: request.headers.range,
+        method: request.method,
+        expectedSecret,
+        fetchImpl,
+      });
+      sendMediaResponse(response, result, request.method);
       return;
     }
 

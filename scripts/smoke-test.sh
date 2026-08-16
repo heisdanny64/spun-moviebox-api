@@ -114,6 +114,33 @@ request_with_body() {
   pass "$name (HTTP $status, $(wc -c < "$body_file") bytes)"
 }
 
+media_smoke() {
+  local name="$1"
+  local media_url="$2"
+  local headers_file="$TMP_DIR/$(body_name "$name").headers"
+  local status
+
+  status="$(curl --silent --show-error --location \
+    --connect-timeout 10 --max-time "$REQUEST_TIMEOUT" \
+    --header 'Accept: video/mp4,video/*;q=0.9,*/*;q=0.8' \
+    --header 'User-Agent: Mozilla/5.0' \
+    --header 'Range: bytes=0-0' \
+    --dump-header "$headers_file" --output /dev/null --write-out '%{http_code}' \
+    "$media_url" 2>"$TMP_DIR/$(body_name "$name").err" || printf '000')"
+
+  if [[ "$status" != "206" && "$status" != "200" ]]; then
+    fail "$name" "HTTP $status from media URL; expected 206 or 200"
+    return 1
+  fi
+
+  if ! grep -qiE '^content-type:[[:space:]]*video/' "$headers_file"; then
+    fail "$name" "HTTP $status did not return a video content type"
+    return 1
+  fi
+
+  pass "$name (HTTP $status, ranged media response)"
+}
+
 extract_first_value() {
   local key="$1"
   local file="$2"
@@ -162,7 +189,16 @@ fi
 request home GET /home 200 || true
 
 if [[ "$RUN_EXPENSIVE" == "1" && -n "$SUBJECT_ID" ]]; then
-  request "stream_${SUBJECT_ID}" GET "/stream/$SUBJECT_ID?se=1&ep=1" 200 || true
+  stream_file=''
+  if request "stream_${SUBJECT_ID}" GET "/stream/$SUBJECT_ID?se=1&ep=1" 200; then
+    stream_file="$LAST_BODY_FILE"
+    media_url="$(extract_first_value url "$stream_file")" || true
+    if [[ -n "${media_url:-}" ]]; then
+      media_smoke "media_${SUBJECT_ID}" "$media_url" || true
+    else
+      fail "media_${SUBJECT_ID}" 'stream response did not contain a media URL'
+    fi
+  fi
   request "stream_all_${SUBJECT_ID}" GET "/stream/$SUBJECT_ID/all" 200 || true
   request "download_${SUBJECT_ID}" GET "/download/$SUBJECT_ID" 200 || true
 else

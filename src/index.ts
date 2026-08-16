@@ -125,7 +125,54 @@ async function fetchResourcePack(env: Env, subjectId: string): Promise<MBResourc
 
 // ─── Shared: map a resource item to a stream/download object ─────────────────
 
-function mapResourceItem(item: MBResourceItem) {
+function base64UrlEncode(value: string): string {
+  const bytes = new TextEncoder().encode(value);
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+async function signMediaProxyTarget(expires: number, targetUrl: string, secret: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  const signature = await crypto.subtle.sign(
+    'HMAC',
+    key,
+    new TextEncoder().encode(`${expires}\n${targetUrl}`)
+  );
+  return Array.from(new Uint8Array(signature), (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+async function proxyMediaUrl(resourceLink: string, env: Env): Promise<string> {
+  const relayBaseUrl = env.RELAY_URL?.trim().replace(/\/+$/, '');
+  const relaySecret = env.RELAY_SECRET?.trim();
+  let target: URL;
+  try {
+    target = new URL(resourceLink);
+  } catch {
+    return resourceLink;
+  }
+
+  if (!relayBaseUrl || !relaySecret || target.protocol !== 'https:' || target.hostname.toLowerCase() !== 'bcdn.hakunaymatata.com') {
+    return resourceLink;
+  }
+
+  const expires = Number.parseInt(target.searchParams.get('t') ?? '', 10);
+  if (!Number.isInteger(expires)) return resourceLink;
+
+  const signature = await signMediaProxyTarget(expires, target.toString(), relaySecret);
+  const proxy = new URL(`${relayBaseUrl}/media/${base64UrlEncode(target.toString())}`);
+  proxy.searchParams.set('e', String(expires));
+  proxy.searchParams.set('s', signature);
+  return proxy.toString();
+}
+
+async function mapResourceItem(item: MBResourceItem, env: Env) {
   const sizeMb = item.size
     ? `${Math.round(parseInt(item.size) / (1024 * 1024))} MB`
     : null;
@@ -139,7 +186,7 @@ function mapResourceItem(item: MBResourceItem) {
   return {
     quality:    `${item.resolution}p`,
     resolution: item.resolution,
-    url:        item.resourceLink,
+    url:        await proxyMediaUrl(item.resourceLink, env),
     format:     'mp4' as const,
     size:       sizeMb,
     codecName:  item.codecName ?? null,
@@ -422,9 +469,11 @@ async function handleStream(subjectId: string, se: number, ep: number, env: Env)
       seenQualities.add(q);
       return true;
     })
-    .map(mapResourceItem);
+    .map((item) => mapResourceItem(item, env));
 
-  return json({ streams, total: streams.length });
+  const resolvedStreams = await Promise.all(streams);
+
+  return json({ streams: resolvedStreams, total: resolvedStreams.length });
 }
 
 // GET /stream/:subjectId/all
@@ -437,7 +486,7 @@ async function handleStreamAll(subjectId: string, env: Env): Promise<Response> {
   if (!pack) return err('No streams available', 404);
 
   // Group by season (se) → episode (ep) — deduplicate by quality within each episode
-  const seasonMap = new Map<number, Map<number, ReturnType<typeof mapResourceItem>[]>>();
+  const seasonMap = new Map<number, Map<number, Awaited<ReturnType<typeof mapResourceItem>>[]>>();
 
   for (const item of pack) {
     const seKey = item.se;
@@ -451,7 +500,7 @@ async function handleStreamAll(subjectId: string, env: Env): Promise<Response> {
 
     const q = `${item.resolution}p`;
     if (!streams.find((x) => x.quality === q)) {
-      streams.push(mapResourceItem(item));
+      streams.push(await mapResourceItem(item, env));
     }
   }
 
@@ -478,7 +527,7 @@ async function handleDownload(subjectId: string, env: Env): Promise<Response> {
   const pack = await fetchResourcePack(env, subjectId);
   if (!pack) return err('No downloads available', 404);
 
-  const seasonMap = new Map<number, Map<number, ReturnType<typeof mapResourceItem>[]>>();
+  const seasonMap = new Map<number, Map<number, Awaited<ReturnType<typeof mapResourceItem>>[]>>();
 
   for (const item of pack) {
     const seKey = item.se;
@@ -492,7 +541,7 @@ async function handleDownload(subjectId: string, env: Env): Promise<Response> {
 
     const q = `${item.resolution}p`;
     if (!qualities.find((x) => x.quality === q)) {
-      qualities.push(mapResourceItem(item));
+      qualities.push(await mapResourceItem(item, env));
     }
   }
 

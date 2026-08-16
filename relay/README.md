@@ -28,6 +28,12 @@ Returns a liveness response without authentication:
 
 `GET /api/health` is retained as a compatibility alias for older Worker health-check configurations.
 
+### `GET /media/:encodedTarget?e=<cdn-t>&s=<signature>`
+
+The Worker returns signed media-proxy URLs for resources hosted on `bcdn.hakunaymatata.com`. The relay verifies the HMAC signature with `RELAY_SECRET`, forwards client `Range` headers using the accepted Android-style playback User-Agent, and streams the upstream response without buffering the media in a JSON envelope.
+
+The media proxy accepts only base64url-encoded HTTPS targets on `bcdn.hakunaymatata.com` that contain the upstream `sign` and `t` query parameters. It is deliberately not a general-purpose proxy. The Worker and Render service must use the same `RELAY_SECRET`.
+
 ### `POST /api/relay`
 
 Requires `X-Relay-Secret` to match the server's `RELAY_SECRET` environment variable. The request body is:
@@ -72,13 +78,18 @@ Only the following hosts can be forwarded to:
 - `api.inmoviebox.com`
 - `h5.aoneroom.com`
 
+Media proxy host:
+
+- `bcdn.hakunaymatata.com`
+
 Update `ALLOWED_HOSTS` in `server.js` if MovieBox changes its mirror pool.
 
 ## Public repository and security model
 
 Anyone can clone and deploy this relay, provided they have their own Render account or another Node.js host. The repository deliberately keeps `RELAY_SECRET` out of source control. The included `.gitignore` excludes `.env` files, local Wrangler state, dependency directories, logs, and other common local artifacts.
 
-The relay is not a general-purpose open proxy. It requires `X-Relay-Secret`, accepts only HTTPS upstream URLs on the explicit MovieBox allowlist, allows only `GET` and `POST`, strips hop-by-hop headers, enforces request-size limits, and applies an upstream timeout. The relay never needs the Worker's `MOVIEBOX_SECRET`, the MovieBox signing key, or the MovieBox bearer token as configuration; those remain part of the Worker request flow.
+The relay is not a general-purpose open proxy. Its JSON API requires `X-Relay-Secret`, accepts only HTTPS upstream URLs on the explicit MovieBox allowlist, allows only `GET` and `POST`, strips hop-by-hop headers, enforces request-size limits, and applies an upstream timeout. Its media endpoint requires a separate HMAC-signed target and only permits the MovieBox CDN host.
+The relay never needs the Worker's `MOVIEBOX_SECRET`, the MovieBox signing key, or the MovieBox bearer token as configuration; those remain part of the Worker request flow.
 
 ## Local development
 
