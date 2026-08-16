@@ -3,8 +3,11 @@ import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import { forwardMediaRequest, forwardRequest, createServer } from '../server.js';
 
-function mediaSignature(expires, targetUrl, secret) {
-  return createHmac('sha256', secret).update(`${expires}\n${targetUrl}`).digest('hex');
+function mediaSignature(expires, targetUrl, secret, filename = '') {
+  const signedPayload = filename
+    ? `${expires}\n${targetUrl}\n${filename}`
+    : `${expires}\n${targetUrl}`;
+  return createHmac('sha256', secret).update(signedPayload).digest('hex');
 }
 
 function fakeHeaders(values = {}) {
@@ -122,7 +125,7 @@ test('forwards signed media requests with range and Android playback headers', a
   assert.equal(result.headers['content-disposition'], undefined);
 });
 
-test('marks download media responses as attachments', async () => {
+test('marks legacy download media responses as attachments', async () => {
   const secret = 'correct';
   const targetUrl = 'https://bcdn.hakunaymatata.com/resource/h265/video-file.mp4?sign=upstream&t=1786838688';
   const expires = 1786838688;
@@ -141,7 +144,55 @@ test('marks download media responses as attachments', async () => {
   });
 
   assert.equal(result.statusCode, 200);
-  assert.equal(result.headers['content-disposition'], 'attachment; filename="video-file.mp4"');
+  assert.equal(result.headers['content-disposition'], 'attachment; filename="video-file.mp4"; filename*=UTF-8\'\'video-file.mp4');
+});
+
+test('uses a signed branded filename for download media responses', async () => {
+  const secret = 'correct';
+  const targetUrl = 'https://bcdn.hakunaymatata.com/resource/h265/video-file.mp4?sign=upstream&t=1786838688';
+  const expires = 1786838688;
+  const filename = 'Inception_1080p_bySpün.mp4';
+
+  const result = await forwardMediaRequest({
+    targetUrl,
+    expires,
+    suppliedSignature: mediaSignature(expires, targetUrl, secret, filename),
+    filename,
+    download: true,
+    expectedSecret: secret,
+    fetchImpl: async () => ({
+      status: 200,
+      headers: fakeHeaders({ 'content-type': 'video/mp4' }),
+      body: null,
+    }),
+  });
+
+  assert.equal(result.statusCode, 200);
+  assert.equal(
+    result.headers['content-disposition'],
+    "attachment; filename=\"Inception_1080p_bySp_n.mp4\"; filename*=UTF-8''Inception_1080p_bySp%C3%BCn.mp4"
+  );
+});
+
+test('rejects a media request when its branded filename is tampered with', async () => {
+  const secret = 'correct';
+  const targetUrl = 'https://bcdn.hakunaymatata.com/resource/h265/video-file.mp4?sign=upstream&t=1786838688';
+  const expires = 1786838688;
+
+  const result = await forwardMediaRequest({
+    targetUrl,
+    expires,
+    suppliedSignature: mediaSignature(expires, targetUrl, secret, 'Original.mp4'),
+    filename: 'Tampered.mp4',
+    download: true,
+    expectedSecret: secret,
+    fetchImpl: async () => {
+      throw new Error('fetch must not be called');
+    },
+  });
+
+  assert.equal(result.statusCode, 401);
+  assert.deepEqual(result.payload, { error: 'unauthorized' });
 });
 
 test('rejects unsigned or non-CDN media targets before fetching', async () => {

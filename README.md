@@ -445,6 +445,7 @@ curl -s "https://your-worker.workers.dev/stream/7618577843911803416/all" \
               "quality": "720p",
               "resolution": 720,
               "url": "https://spun-moviebox-relay.onrender.com/media/<encoded-target>?e=...&s=...",
+              "filename": null,
               "format": "mp4",
               "size": "53 MB",
               "codecName": "h264",
@@ -486,7 +487,8 @@ curl -s "https://your-worker.workers.dev/download/5139196938264400928" \
             {
               "quality": "1080p",
               "resolution": 1080,
-              "url": "https://spun-moviebox-relay.onrender.com/media/<encoded-target>?e=...&s=...",
+              "url": "https://spun-moviebox-relay.onrender.com/media/<encoded-target>?e=...&s=...&download=1&filename=...",
+              "filename": "The_Last_of_Us_1080p_S01E01_bySpün.mp4",
               "format": "mp4",
               "size": "360 MB",
               "codecName": "hevc",
@@ -510,7 +512,17 @@ curl -s "https://your-worker.workers.dev/download/5139196938264400928" \
 
 The Worker does not expose the upstream CDN URL directly anymore. For `bcdn.hakunaymatata.com` resources, it signs a relay URL that preserves HTTP range requests and streams the media response from Render. This is required because the upstream CDN rejects browser-like playback requests with `428 Forbidden` while accepting the Android-style request made by the relay.
 
-Stream URLs remain inline-playable. URLs returned by `/download/:subjectId` include a download signal, and the relay adds `Content-Disposition: attachment` so browsers and download managers save the media instead of opening it as an inline stream.
+Stream URLs remain inline-playable and do not force an attachment download. URLs returned by `/download/:subjectId` include a signed download filename, and the relay adds `Content-Disposition: attachment` so browsers and download managers save the media instead of opening it as an inline stream.
+
+Download filenames use the following format:
+
+```text
+Movie_Title_1080p_bySpün.mp4
+Series_Title_1080p_S01E02_bySpün.mp4
+Shorts_Title_720p_S01E03_bySpün.mp4
+```
+
+Movies omit the season and episode segment. TV and shorts retain zero-padded `S##E##` values. The JSON response exposes the same value in each download quality object’s `filename` field. The requested filename is included in the HMAC-signed relay URL, preventing clients from changing the attachment name without invalidating the proxy signature.
 
 If the relay service is redeployed under a different hostname, keep the Worker’s `RELAY_URL` secret synchronized with that hostname. After a Render deployment, verify the media path with a fresh `/stream` response and a small ranged request from a media client.
 

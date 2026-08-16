@@ -28,9 +28,19 @@ Returns a liveness response without authentication:
 
 `GET /api/health` is retained as a compatibility alias for older Worker health-check configurations.
 
-### `GET /media/:encodedTarget?e=<cdn-t>&s=<signature>`
+### `GET /media/:encodedTarget?e=<cdn-t>&s=<signature>&download=1&filename=<signed-name>`
 
 The Worker returns signed media-proxy URLs for resources hosted on `bcdn.hakunaymatata.com`. The relay verifies the HMAC signature with `RELAY_SECRET`, forwards client `Range` headers using the accepted Android-style playback User-Agent, and streams the upstream response without buffering the media in a JSON envelope.
+
+Download URLs include `download=1` and a signed `filename` parameter. The relay emits a UTF-8-aware `Content-Disposition: attachment` header using that filename. Stream URLs omit the download flag and remain inline-playable. The filename is included in the HMAC payload, so changing it invalidates the signature. Legacy signed URLs without `filename` remain supported and fall back to the upstream CDN basename.
+
+The Worker generates names in this format:
+
+```text
+Movie_Title_1080p_bySpün.mp4
+Series_Title_1080p_S01E02_bySpün.mp4
+Shorts_Title_720p_S01E03_bySpün.mp4
+```
 
 The media proxy accepts only base64url-encoded HTTPS targets on `bcdn.hakunaymatata.com` that contain the upstream `sign` and `t` query parameters. It is deliberately not a general-purpose proxy. The Worker and Render service must use the same `RELAY_SECRET`.
 

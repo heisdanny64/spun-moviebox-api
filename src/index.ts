@@ -132,7 +132,12 @@ function base64UrlEncode(value: string): string {
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-async function signMediaProxyTarget(expires: number, targetUrl: string, secret: string): Promise<string> {
+async function signMediaProxyTarget(
+  expires: number,
+  targetUrl: string,
+  secret: string,
+  filename = ''
+): Promise<string> {
   const key = await crypto.subtle.importKey(
     'raw',
     new TextEncoder().encode(secret),
@@ -140,15 +145,49 @@ async function signMediaProxyTarget(expires: number, targetUrl: string, secret: 
     false,
     ['sign']
   );
+  const signedPayload = filename
+    ? `${expires}\n${targetUrl}\n${filename}`
+    : `${expires}\n${targetUrl}`;
   const signature = await crypto.subtle.sign(
     'HMAC',
     key,
-    new TextEncoder().encode(`${expires}\n${targetUrl}`)
+    new TextEncoder().encode(signedPayload)
   );
   return Array.from(new Uint8Array(signature), (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
-async function proxyMediaUrl(resourceLink: string, env: Env, download = false): Promise<string> {
+function sanitizeFilenamePart(value: string, fallback: string): string {
+  const normalized = value
+    .normalize('NFKC')
+    .replace(/[\u0000-\u001f\u007f]/g, '')
+    .replace(/[<>:"/\\|?*]/g, ' ')
+    .trim()
+    .replace(/\s+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^\.+|\.+$/g, '')
+    .slice(0, 100);
+
+  return normalized || fallback;
+}
+
+function buildDownloadFilename(title: string, subjectType: number, item: MBResourceItem): string {
+  const titlePart = sanitizeFilenamePart(title, 'MovieBox');
+  const qualityPart = Number.isFinite(item.resolution) && item.resolution > 0
+    ? `${item.resolution}p`
+    : 'unknown';
+  const episodePart = subjectType === 1
+    ? ''
+    : `_S${String(item.se).padStart(2, '0')}E${String(item.ep).padStart(2, '0')}`;
+
+  return `${titlePart}_${qualityPart}${episodePart}_bySpün.mp4`;
+}
+
+async function proxyMediaUrl(
+  resourceLink: string,
+  env: Env,
+  download = false,
+  filename?: string
+): Promise<string> {
   const relayBaseUrl = env.RELAY_URL?.trim().replace(/\/+$/, '');
   const relaySecret = env.RELAY_SECRET?.trim();
   let target: URL;
@@ -165,15 +204,21 @@ async function proxyMediaUrl(resourceLink: string, env: Env, download = false): 
   const expires = Number.parseInt(target.searchParams.get('t') ?? '', 10);
   if (!Number.isInteger(expires)) return resourceLink;
 
-  const signature = await signMediaProxyTarget(expires, target.toString(), relaySecret);
+  const signature = await signMediaProxyTarget(expires, target.toString(), relaySecret, filename);
   const proxy = new URL(`${relayBaseUrl}/media/${base64UrlEncode(target.toString())}`);
   proxy.searchParams.set('e', String(expires));
   proxy.searchParams.set('s', signature);
   if (download) proxy.searchParams.set('download', '1');
+  if (filename) proxy.searchParams.set('filename', filename);
   return proxy.toString();
 }
 
-async function mapResourceItem(item: MBResourceItem, env: Env, download = false) {
+async function mapResourceItem(
+  item: MBResourceItem,
+  env: Env,
+  download = false,
+  filename?: string
+) {
   const sizeMb = item.size
     ? `${Math.round(parseInt(item.size) / (1024 * 1024))} MB`
     : null;
@@ -187,7 +232,8 @@ async function mapResourceItem(item: MBResourceItem, env: Env, download = false)
   return {
     quality:    `${item.resolution}p`,
     resolution: item.resolution,
-    url:        await proxyMediaUrl(item.resourceLink, env, download),
+    url:        await proxyMediaUrl(item.resourceLink, env, download, filename),
+    filename:   filename ?? null,
     format:     'mp4' as const,
     size:       sizeMb,
     codecName:  item.codecName ?? null,
@@ -528,6 +574,12 @@ async function handleDownload(subjectId: string, env: Env): Promise<Response> {
   const pack = await fetchResourcePack(env, subjectId);
   if (!pack) return err('No downloads available', 404);
 
+  const detail = await fetchWithHostPool<MBDetailData>(
+    env, PATHS.get, 'GET', { subjectId }
+  );
+  const subjectTitle = detail?.title?.trim() || `Subject_${subjectId}`;
+  const subjectType = detail?.subjectType ?? (pack.every((item) => item.se === 0 && item.ep === 0) ? 1 : 2);
+
   const seasonMap = new Map<number, Map<number, Awaited<ReturnType<typeof mapResourceItem>>[]>>();
 
   for (const item of pack) {
@@ -542,7 +594,8 @@ async function handleDownload(subjectId: string, env: Env): Promise<Response> {
 
     const q = `${item.resolution}p`;
     if (!qualities.find((x) => x.quality === q)) {
-      qualities.push(await mapResourceItem(item, env, true));
+      const filename = buildDownloadFilename(subjectTitle, subjectType, item);
+      qualities.push(await mapResourceItem(item, env, true, filename));
     }
   }
 

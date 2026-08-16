@@ -1,7 +1,6 @@
 name = "spun-moviebox"
 main = "src/index.ts"
 compatibility_date = "2024-11-01"
-compatibility_flags = ["nodejs_compat"]
 
 [vars]
 NIGERIA_IP = "197.211.52.65"

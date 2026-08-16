@@ -57,14 +57,41 @@ function secretsMatch(supplied, expected) {
   return suppliedBytes.length === expectedBytes.length && timingSafeEqual(suppliedBytes, expectedBytes);
 }
 
-function mediaSignature(expires, targetUrl, secret) {
-  return createHmac('sha256', secret).update(`${expires}\n${targetUrl}`).digest('hex');
+function mediaSignature(expires, targetUrl, secret, filename = '') {
+  const signedPayload = filename
+    ? `${expires}\n${targetUrl}\n${filename}`
+    : `${expires}\n${targetUrl}`;
+  return createHmac('sha256', secret).update(signedPayload).digest('hex');
 }
 
-function mediaFilename(target) {
+function sanitizeFilename(value, fallback = 'moviebox.mp4') {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 200 || /[\r\n]/.test(value)) {
+    return fallback;
+  }
+
+  const safeName = value
+    .normalize('NFKC')
+    .replace(/[\u0000-\u001f\u007f]/g, '')
+    .replace(/[<>:"/\\|?*]/g, ' ')
+    .trim()
+    .replace(/\s+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^\.+|\.+$/g, '')
+    .slice(0, 120);
+
+  return safeName || fallback;
+}
+
+function mediaFilename(target, requestedFilename) {
+  if (requestedFilename) return sanitizeFilename(requestedFilename);
   const rawName = decodeURIComponent(target.pathname.split('/').pop() || 'moviebox.mp4');
-  const safeName = rawName.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120);
-  return safeName || 'moviebox.mp4';
+  return sanitizeFilename(rawName);
+}
+
+function contentDisposition(filename) {
+  const asciiFallback = filename.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
+  const encoded = encodeURIComponent(filename).replace(/[!'()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
+  return `attachment; filename="${asciiFallback}"; filename*=UTF-8''${encoded}`;
 }
 
 function validateMediaTarget(value) {
@@ -193,15 +220,19 @@ export async function forwardMediaRequest({
   fetchImpl = fetch,
   timeoutMs = configuredTimeoutMs(),
   download = false,
+  filename,
 }) {
   if (!expectedSecret) return { statusCode: 500, payload: { error: 'RELAY_SECRET not configured on server' } };
   if (!Number.isInteger(expires)) return { statusCode: 400, payload: { error: 'invalid media expiry' } };
+  if (filename !== undefined && (typeof filename !== 'string' || filename.length === 0 || filename.length > 200 || /[\r\n]/.test(filename))) {
+    return { statusCode: 400, payload: { error: 'invalid media filename' } };
+  }
 
   const targetResult = validateMediaTarget(targetUrl);
   if (targetResult.error) return { statusCode: 403, payload: { error: targetResult.error } };
   const targetExpires = Number.parseInt(targetResult.target.searchParams.get('t') ?? '', 10);
   if (targetExpires !== expires) return { statusCode: 400, payload: { error: 'media expiry does not match target url' } };
-  if (!secretsMatch(suppliedSignature, mediaSignature(expires, targetResult.target.toString(), expectedSecret))) {
+  if (!secretsMatch(suppliedSignature, mediaSignature(expires, targetResult.target.toString(), expectedSecret, filename ?? ''))) {
     return { statusCode: 401, payload: { error: 'unauthorized' } };
   }
   if (!['GET', 'HEAD'].includes(method)) return { statusCode: 405, payload: { error: 'media method must be GET or HEAD' } };
@@ -226,7 +257,7 @@ export async function forwardMediaRequest({
       const value = upstreamResponse.headers.get(name);
       if (value) headers[name] = value;
     }
-    if (download) headers['content-disposition'] = `attachment; filename="${mediaFilename(targetResult.target)}"`;
+    if (download) headers['content-disposition'] = contentDisposition(mediaFilename(targetResult.target, filename));
 
     return { statusCode: upstreamResponse.status, headers, body: upstreamResponse.body };
   } catch (error) {
@@ -360,6 +391,7 @@ export function createServer({ expectedSecret = process.env.RELAY_SECRET, fetchI
         targetUrl,
         expires: Number.parseInt(query.get('e') ?? '', 10),
         suppliedSignature: query.get('s'),
+        filename: query.get('filename') ?? undefined,
         range: request.headers.range,
         method: request.method,
         download: query.get('download') === '1',

@@ -122,6 +122,7 @@ media_smoke() {
   local name="$1"
   local media_url="$2"
   local expected_mode="${3:-inline}"
+  local expected_filename_marker="${4:-}"
   local headers_file="$TMP_DIR/$(body_name "$name").headers"
   local status
 
@@ -148,6 +149,10 @@ media_smoke() {
   if [[ "$expected_mode" == "attachment" ]]; then
     if ! grep -qiE '^content-disposition:[[:space:]]*attachment;' "$headers_file"; then
       fail "$name" 'expected Content-Disposition: attachment'
+      return 1
+    fi
+    if [[ -n "$expected_filename_marker" ]] && ! grep -qi "$expected_filename_marker" "$headers_file"; then
+      fail "$name" "expected branded filename marker: $expected_filename_marker"
       return 1
     fi
   elif grep -qiE '^content-disposition:[[:space:]]*attachment;' "$headers_file"; then
@@ -219,8 +224,12 @@ if [[ "$RUN_EXPENSIVE" == "1" && -n "$SUBJECT_ID" ]]; then
   request "stream_all_${SUBJECT_ID}" GET "/stream/$SUBJECT_ID/all" 200 || true
   if request "download_${SUBJECT_ID}" GET "/download/$SUBJECT_ID" 200; then
     download_url="$(extract_first_value url "$LAST_BODY_FILE")" || true
+    download_filename="$(extract_first_value filename "$LAST_BODY_FILE")" || true
+    if [[ -z "${download_filename:-}" || "$download_filename" != *_bySpün.mp4 ]]; then
+      fail "download_filename_${SUBJECT_ID}" "expected a branded filename ending in _bySpün.mp4, got: ${download_filename:-<missing>}"
+    fi
     if [[ -n "${download_url:-}" ]]; then
-      media_smoke "download_media_${SUBJECT_ID}" "$download_url" attachment || true
+      media_smoke "download_media_${SUBJECT_ID}" "$download_url" attachment 'bySp%C3%BCn.mp4' || true
     else
       fail "download_media_${SUBJECT_ID}" 'download response did not contain a media URL'
     fi
