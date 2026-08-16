@@ -61,7 +61,9 @@ request() {
     curl_args+=(--header "X-Worker-Secret: $WORKER_SECRET")
   fi
 
-  status="$(curl "${curl_args[@]}" 2>"$TMP_DIR/$(body_name "$name").err" || printf '000')"
+  if ! status="$(curl "${curl_args[@]}" 2>"$TMP_DIR/$(body_name "$name").err")"; then
+    status="${status:-000}"
+  fi
   if [[ "$status" != "$expected_status" ]]; then
     local detail
     detail="$(head -c 240 "$body_file" 2>/dev/null || true)"
@@ -89,13 +91,15 @@ request_with_body() {
   local status
 
   LAST_BODY_FILE="$body_file"
-  status="$(curl --silent --show-error --location \
+  if ! status="$(curl --silent --show-error --location \
     --connect-timeout 10 --max-time "$REQUEST_TIMEOUT" \
     --output "$body_file" --write-out '%{http_code}' \
     --request "$method" "$BASE_URL$path" \
     --header "X-Worker-Secret: $WORKER_SECRET" \
     --header 'Content-Type: application/json' \
-    --data "$request_body" 2>"$TMP_DIR/$(body_name "$name").err" || printf '000')"
+    --data "$request_body" 2>"$TMP_DIR/$(body_name "$name").err")"; then
+    status="${status:-000}"
+  fi
 
   if [[ "$status" != "$expected_status" ]]; then
     local detail
@@ -121,13 +125,15 @@ media_smoke() {
   local headers_file="$TMP_DIR/$(body_name "$name").headers"
   local status
 
-  status="$(curl --silent --show-error --location \
+  if ! status="$(curl --silent --show-error --location \
     --connect-timeout 10 --max-time "$REQUEST_TIMEOUT" \
     --header 'Accept: video/mp4,video/*;q=0.9,*/*;q=0.8' \
     --header 'User-Agent: Mozilla/5.0' \
     --header 'Range: bytes=0-0' \
     --dump-header "$headers_file" --output /dev/null --write-out '%{http_code}' \
-    "$media_url" 2>"$TMP_DIR/$(body_name "$name").err" || printf '000')"
+    "$media_url" 2>"$TMP_DIR/$(body_name "$name").err")"; then
+    status="${status:-000}"
+  fi
 
   if [[ "$status" != "206" && "$status" != "200" ]]; then
     fail "$name" "HTTP $status from media URL; expected 206 or 200"
