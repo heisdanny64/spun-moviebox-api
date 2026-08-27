@@ -2,7 +2,7 @@
 
 # 🎬 Spün MovieBox API
 
-**An unofficial REST API built by [Spün](https://byspun.xyz) for MovieBox — wrapping the MovieBox Android & H5 APIs with host pool fallback, HMAC request signing, multi-quality stream resolution, and structured JSON responses, deployed on Cloudflare Workers.**
+**An unofficial REST API built by [Spün](https://github.com/byspun) for MovieBox — wrapping the MovieBox Android & H5 APIs with host pool fallback, HMAC request signing, multi-quality stream resolution, and structured JSON responses, deployed on Cloudflare Workers.**
 
 [![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-F38020?style=flat&logo=cloudflare&logoColor=white)](https://workers.cloudflare.com/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?style=flat&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
