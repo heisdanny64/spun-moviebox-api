@@ -32,8 +32,16 @@ export const HOST_POOL = [
   'https://api.inmoviebox.com',
 ];
 
-const VERSION_CODE = 50020044;
-const VERSION_NAME = '3.0.03.0529.03';
+// 2026-09-03: bumped from 3.0.03.0529.03 / 50020044 — MovieBox's CDN began
+// rejecting playback with "this version of MovieBox is outdated" once the
+// app moved to the 4.x line. This is the closest version/code pair we could
+// confirm from a real release (MovieBox 4.0.02, build dated 2026-08-28);
+// the true latest at time of writing is 4.0.02.0903.02, but its exact
+// versionCode wasn't independently confirmed, so we're using the last
+// verified pair rather than guessing the integer. Revisit if playback
+// issues persist — may need to bump again once a newer pair is confirmed.
+const VERSION_CODE = 50020125;
+const VERSION_NAME = '4.0.02.0828.03';
 const ANDROID_VERSION = '13';
 const ANDROID_BUILD = 'TQ2A.230405.003';
 const DEVICE_MODEL = '23078RKD5C';
